@@ -36,6 +36,7 @@ jobs:
       run: |
           cd fr-config-manager
           npm install --ws
+          npm install axios
           cd packages/fr-config-push
           npm link
     - name: Update static config
