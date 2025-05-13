@@ -1,0 +1,51 @@
+name: Check for Lock Tenants
+
+env:
+  SERVICE_ACCOUNT_ID: ${{ vars.SERVICE_ACCOUNT_ID }}
+  SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+  TENANT_BASE_URL: ${{ vars.TENANT_BASE_URL }}
+  REALMS: ${{ vars.REALMS }}
+  SCRIPT_PREFIXES: ${{ vars.SCRIPT_PREFIXES }}
+  SERVICE_ACCOUNT_CLIENT_ID: ${{ vars.SERVICE_ACCOUNT_CLIENT_ID }}
+  SERVICE_ACCOUNT_SCOPE: ${{ vars.SERVICE_ACCOUNT_SCOPE }}
+  CONFIG_DIR: ${{ github.workspace }}
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: valientepoc 
+    strategy:
+      matrix:
+        node-version: [ 19.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ matrix.node-version }}
+    - name: install external repo
+      run: git clone https://github.com/ForgeRock/fr-config-manager.git
+    - name: Install config push
+      run: |
+          cd fr-config-promote
+          npm install --ws
+          npm install axios
+          cd packages/fr-config-promote
+          npm link
+    - name: Check locked status
+      id: check_status
+      run: |
+        OUTPUT=$(fr-config-promote check-locked-status)
+        echo "$OUTPUT"
+        echo "json_output=$OUTPUT" >> "$GITHUB_OUTPUT"
+  
+    - name: Lock tenants if unlocked
+      if: contains(steps.check_status.outputs.json_output, '"result": "unlocked"')
+      run: |
+        echo "Environment is unlocked. Locking tenants..."
+        fr-config-promote lock-tenants
