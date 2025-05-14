@@ -1,4 +1,4 @@
-name: Ping AIC Static Config
+name: Ping AIC Push Static Config
 
 env:
   SERVICE_ACCOUNT_ID: ${{ vars.SERVICE_ACCOUNT_ID }}

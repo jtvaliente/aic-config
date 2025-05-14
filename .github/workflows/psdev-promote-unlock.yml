@@ -1,4 +1,4 @@
-name: Check for Lock Tenants
+name: Unlock Tenants
 
 env:
   SERVICE_ACCOUNT_ID: ${{ vars.SERVICE_ACCOUNT_ID }}
