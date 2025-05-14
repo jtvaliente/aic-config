@@ -35,17 +35,27 @@ jobs:
           cd fr-config-promote
           npm install --ws
           npm install axios
+          apt-get update && sudo apt-get install -y jq
           cd packages/fr-config-promote
           npm link
     - name: Check locked status
       id: check_status
       run: |
         OUTPUT=$(fr-config-promote check-locked-status)
+        echo "Raw output:"
         echo "$OUTPUT"
-        echo "json_output=$OUTPUT" >> "$GITHUB_OUTPUT"
-  
-    - name: Lock tenants if unlocked
-      if: contains(steps.check_status.outputs.json_output, '"status": "locked"')
+        
+        # Save to file (optional for debugging)
+        echo "$OUTPUT" > status.json
+        
+        # Extract whether state is locked
+        IS_LOCKED=$(echo "$OUTPUT" | jq -r '.lowerEnv.state == "locked"')
+        PROMOTION_ID=$(echo "$OUTPUT" | jq -r '.promotionId')
+        
+        echo "is_locked=$IS_LOCKED" >> $GITHUB_OUTPUT
+        echo "promotion_id=$PROMOTION_ID" >> $GITHUB_OUTPUT
+    - name: Unlock tenants if locked
+      if: steps.check_status.outputs.is_locked == 'true'
       run: |
-        echo "Environment is unlocked. Locking tenants..."
-        fr-config-promote unlock-tenants -i 214554ec-1e23-4919-917c-4deefe22d76e
+       echo "Environment is locked. Unlocking tenants..."
+       fr-config-promote unlock-tenants -i ${{ steps.check_status.outputs.promotion_id }}
