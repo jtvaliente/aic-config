@@ -11,10 +11,7 @@ env:
   CONFIG_DIR: ${{ github.workspace }}
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
