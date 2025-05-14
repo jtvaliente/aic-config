@@ -30,9 +30,9 @@ jobs:
         node-version: ${{ matrix.node-version }}
     - name: install external repo
       run: git clone https://github.com/ForgeRock/fr-config-manager.git
-    - name: Install config push
+    - name: Install config promote
       run: |
-          cd fr-config-promote
+          cd fr-config-manager
           npm install --ws
           npm install axios
           cd packages/fr-config-promote
