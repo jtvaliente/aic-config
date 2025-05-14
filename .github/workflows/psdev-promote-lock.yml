@@ -41,11 +41,18 @@ jobs:
       id: check_status
       run: |
         OUTPUT=$(fr-config-promote check-locked-status)
+        echo "Raw output:"
         echo "$OUTPUT"
-        echo "json_output=$OUTPUT" >> "$GITHUB_OUTPUT"
+        
+        # Extract needed values
+        RESULT=$(echo "$OUTPUT" | jq -r '.result')
+        STATE=$(echo "$OUTPUT" | jq -r '.lowerEnv.state')
+        
+        echo "result=$RESULT" >> "$GITHUB_OUTPUT"
+        echo "state=$STATE" >> "$GITHUB_OUTPUT"
   
     - name: Lock tenants if unlocked
-      if: contains(steps.check_status.outputs.json_output, '"result": "unlocked"')
+      if: steps.check_status.outputs.state == 'unlocked'
       run: |
         echo "Environment is unlocked. Locking tenants..."
         fr-config-promote lock-tenants
