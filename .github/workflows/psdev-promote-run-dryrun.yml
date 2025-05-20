@@ -76,13 +76,20 @@ jobs:
           # Get the output from your command and parse it to get the status
           OUTPUT=$(fr-config-promote check-promotion-status)
           STATUS=$(echo "$OUTPUT" | jq -r '.status')  # Extract the status field from the output
+          MESSAGE=$(echo "$OUTPUT" | jq -r '.message')  # Extract the message field from the output
            
-          echo "Current status: $STATUS"
-           
+          echo "Tenant status: $STATUS"
+          echo "Status is: $MESSAGE"
+          
+          if [ "$STATUS" == "ERROR" ]; then
+            echo "❌ Promotion failed with status: $MESSAGE"
+            exit 1
+          fi
+          
           if [ "$STATUS" != "READY" ]; then
             echo "Waiting for status to be READY..."
             sleep 30  # Wait for 30 seconds before checking again 
           fi
         done
      
-        echo "Promotion Ready!"
+        echo "✅ Promotion Ready!"
