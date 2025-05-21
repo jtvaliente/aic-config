@@ -40,7 +40,7 @@ jobs:
           cd packages/fr-config-promote
           npm link
 
-      - name: Check Promotion Status
+      - name: Check promotion status
         id: check_status
         run: |
           OUTPUT=$(fr-config-promote check-promotion-status)
@@ -52,16 +52,48 @@ jobs:
           echo "GLOBAL_LOCK=$GLOBAL_LOCK" >> $GITHUB_ENV
           echo "PROMOTION_ID=$PROMOTION_ID" >> $GITHUB_ENV
 
-      - name: Lock tenant if not locked
+      - name: Lock tenants if not locked
         if: env.GLOBAL_LOCK == 'false'
         run: |
-          echo "Tenant is not locked. Locking now..."
+          echo "Tenants are not locked. Locking now..."
           fr-config-promote lock-tenants
 
-      - name: Run dry-run promotion
+      - name: Run dry-run promotion and check status
+        id: dryrun
         run: |
           echo "Running dry-run promotion..."
           fr-config-promote run-dryrun-promotion
+
+          STATUS="RUNNING"
+          while [ "$STATUS" != "READY" ]; do
+            echo "Checking dry-run promotion status..."
+            OUTPUT=$(fr-config-promote check-promotion-status)
+            STATUS=$(echo "$OUTPUT" | jq -r '.status')
+            MESSAGE=$(echo "$OUTPUT" | jq -r '.message')
+            PROMOTION_ID=$(echo "$OUTPUT" | jq -r '.promotionId')
+
+            echo "Dry-run status: $STATUS"
+
+            if [ "$STATUS" == "ERROR" ]; then
+              echo "Dry-run failed: $MESSAGE"
+              echo "Unlocking before exiting..."
+              fr-config-promote unlock-tenants -i $PROMOTION_ID
+              exit 1
+            fi
+
+            if [ "$STATUS" != "READY" ]; then
+              echo "Tenants are READY for Promotion waiting..."
+              echo "$MESSAGE"
+              sleep 30
+            fi
+          done
+
+          echo "Dry-run promotion completed successfully: $MESSAGE"
+
+      - name: Run promotion
+        run: |
+          echo "Running actual promotion..."
+          fr-config-promote run-promotion
 
           STATUS="RUNNING"
           while [ "$STATUS" != "READY" ]; do
@@ -69,22 +101,38 @@ jobs:
             OUTPUT=$(fr-config-promote check-promotion-status)
             STATUS=$(echo "$OUTPUT" | jq -r '.status')
             MESSAGE=$(echo "$OUTPUT" | jq -r '.message')
+            PROMOTION_ID=$(echo "$OUTPUT" | jq -r '.promotionId')
 
-            echo "Status: $STATUS"
+            echo "Promotion status: $STATUS"
+
             if [ "$STATUS" == "ERROR" ]; then
-              echo "❌ Promotion failed: $MESSAGE"
+              echo "Promotion failed: $MESSAGE"
+              echo "Unlocking before exiting..."
+              fr-config-promote unlock-tenants -i $PROMOTION_ID
               exit 1
             fi
 
-            if [ "$STATUS" != "READY" ]; then
-              echo "Waiting for READY status..."
+            if [ "$STATUS" != "COMPLETE" ]; then
+              echo "Still processing... waiting..."
+              echo "$MESSAGE"
               sleep 30
             fi
           done
 
-          echo "✅ Promotion is READY."
+          echo "Promotion complete."
 
-      - name: Unlock tenant
+      - name: Unlock tenant post promotion if still locked
         run: |
-          echo "Unlocking tenant..."
-          fr-config-promote unlock-tenants -i $PROMOTION_ID
+          echo "Checking promotion status before unlocking..."
+          OUTPUT=$(fr-config-promote check-promotion-status)
+          echo "$OUTPUT"
+      
+          GLOBAL_LOCK=$(echo "$OUTPUT" | jq -r '.globalLock')
+          echo "Current globalLock: $GLOBAL_LOCK"
+      
+          if [ "$GLOBAL_LOCK" == "LOCKED" ]; then
+            echo "Tenant is still locked. Unlocking..."
+            fr-config-promote unlock-tenants -i $PROMOTION_ID
+          else
+            echo "Tenant is already unlocked. No action needed."
+          fi
