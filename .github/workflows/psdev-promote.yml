@@ -1,0 +1,109 @@
+name: Dry Promotion (Including Dry Run)
+
+env:
+  SERVICE_ACCOUNT_ID: ${{ vars.SERVICE_ACCOUNT_ID }}
+  SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+  TENANT_BASE_URL: ${{ vars.TENANT_BASE_URL }}
+  REALMS: ${{ vars.REALMS }}
+  SCRIPT_PREFIXES: ${{ vars.SCRIPT_PREFIXES }}
+  SERVICE_ACCOUNT_CLIENT_ID: ${{ vars.SERVICE_ACCOUNT_CLIENT_ID }}
+  SERVICE_ACCOUNT_SCOPE: ${{ vars.SERVICE_ACCOUNT_SCOPE }}
+  CONFIG_DIR: ${{ github.workspace }}
+  TENANT_ENV_UPPER_FQDN: ${{ vars.TENANT_ENV_UPPER_FQDN }}
+  SERVICE_ACCOUNT_UPPER_CLIENT_ID: ${{ vars.SERVICE_ACCOUNT_UPPER_CLIENT_ID }}
+  SERVICE_ACCOUNT_UPPER_ID: ${{ vars.SERVICE_ACCOUNT_UPPER_ID }}
+  SERVICE_ACCOUNT_UPPER_KEY: ${{ secrets.SERVICE_ACCOUNT_UPPER_KEY }}
+  SERVICE_ACCOUNT_PROMOTION_SCOPE: ${{ vars.SERVICE_ACCOUNT_PROMOTION_SCOPE }}
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    environment: pspromodev
+    outputs:
+      global_lock: ${{ steps.check_status.outputs.GLOBAL_LOCK }}
+      promotion_id: ${{ steps.check_status.outputs.promotion_id }}
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 19.x
+
+      - name: Install fr-config-promote
+        run: |
+          git clone https://github.com/ForgeRock/fr-config-manager.git
+          cd fr-config-manager
+          npm install --ws
+          npm install axios
+          sudo apt-get update && sudo apt-get install -y jq
+          cd packages/fr-config-promote
+          npm link
+
+      - name: Check lock status
+        id: check_status
+        run: |
+          OUTPUT=$(fr-config-promote check-promotion-status)
+          echo "$OUTPUT"
+
+          GLOBAL_LOCK=$(echo "$OUTPUT" | jq -r '.globalLock == "LOCKED"')
+          PROMOTION_ID=$(echo "$OUTPUT" | jq -r '.promotionId')
+
+          echo "GLOBAL_LOCK=$GLOBAL_LOCK" >> $GITHUB_OUTPUT
+          echo "promotion_id=$PROMOTION_ID" >> $GITHUB_OUTPUT
+
+  lock:
+    name: Lock Tenant (if not already locked)
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.global_lock == 'false'
+    steps:
+      - name: Lock tenant
+        run: |
+          echo "Tenant is not locked. Locking now..."
+          fr-config-promote lock-tenants
+
+  dryrun:
+    name: Run Dry Run Promotion
+    runs-on: ubuntu-latest
+    needs: [setup, lock]
+    if: needs.setup.outputs.global_lock == 'true' || needs.lock.result == 'success'
+    steps:
+      - name: Run dry run promotion
+        run: |
+          echo "Running dry-run promotion..."
+          fr-config-promote run-dryrun-promotion
+
+          STATUS="RUNNING"
+          while [ "$STATUS" != "READY" ]; do
+            echo "Checking promotion status..."
+            OUTPUT=$(fr-config-promote check-promotion-status)
+            STATUS=$(echo "$OUTPUT" | jq -r '.status')
+            MESSAGE=$(echo "$OUTPUT" | jq -r '.message')
+
+            echo "Status: $STATUS"
+            if [ "$STATUS" == "ERROR" ]; then
+              echo "❌ Promotion failed: $MESSAGE"
+              exit 1
+            fi
+
+            if [ "$STATUS" != "READY" ]; then
+              echo "Waiting for READY status..."
+              sleep 30
+            fi
+          done
+
+          echo "✅ Promotion is READY."
+
+  unlock:
+    name: Unlock Tenant
+    runs-on: ubuntu-latest
+    needs: dryrun
+    steps:
+      - name: Unlock tenant
+        run: |
+          echo "Unlocking tenant..."
+          fr-config-promote unlock-tenants -i ${{ steps.check_status.outputs.promotion_id }}
