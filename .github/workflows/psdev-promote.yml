@@ -62,6 +62,7 @@ jobs:
       - name: Check lock status
         id: check
         run: |
+          cd packages/fr-config-promote
           OUTPUT=$(fr-config-promote check-promotion-status)
           echo "$OUTPUT"
 
