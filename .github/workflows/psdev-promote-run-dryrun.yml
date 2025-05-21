@@ -46,7 +46,7 @@ jobs:
     - name: Check locked status
       id: check_status
       run: |
-        OUTPUT=$(fr-config-promote check-locked-status)
+        OUTPUT=$(fr-config-promote check-promotion-status)
         echo "Raw output:"
         echo "$OUTPUT"
         
@@ -54,16 +54,16 @@ jobs:
         echo "$OUTPUT" > status.json
         
         # Extract whether state is locked
-        IS_LOCKED=$(echo "$OUTPUT" | jq -r '.lowerEnv.state == "locked"')
+        GLOBAL_LOCK=$(echo "$OUTPUT" | jq -r '.globalLock == "LOCKED"')
         PROMOTION_ID=$(echo "$OUTPUT" | jq -r '.promotionId')
         STATUS=$(echo "$OUTPUT" | jq -r '.status')
         
-        echo "is_locked=$IS_LOCKED" >> $GITHUB_OUTPUT
+        echo "GLOBAL_LOCK=$GLOBAL_LOCK" >> $GITHUB_OUTPUT
         echo "promotion_id=$PROMOTION_ID" >> $GITHUB_OUTPUT
         echo "status=$STATUS" >> $GITHUB_OUTPUT
     
     - name: Run dry run promotion if locked
-      if: steps.check_status.outputs.is_locked == 'true'
+      if: steps.check_status.outputs.global_lock == 'true'
       run: |
         echo "Environment is locked. Running dry promotion..."
         fr-config-promote run-dryrun-promotion
