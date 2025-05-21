@@ -56,14 +56,15 @@ jobs:
           echo "promotion_id=$PROMOTION_ID" >> $GITHUB_OUTPUT
 
   lock:
-    name: Lock Tenant (if not already locked)
+    name: Lock Tenants (if not already locked)
     runs-on: ubuntu-latest
     needs: setup
     if: needs.setup.outputs.global_lock == 'false'
     steps:
       - name: Lock tenant
         run: |
-          echo "Tenant is not locked. Locking now..."
+          pwd
+          echo "Tenants are not locked. Locking now..."
           fr-config-promote lock-tenants
 
   dryrun:
