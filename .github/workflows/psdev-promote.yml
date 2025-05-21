@@ -19,12 +19,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  setup:
-    name: Setup fr-config-manager Environment
+  promote:
     runs-on: ubuntu-latest
     environment: pspromodev
-    outputs:
-      node-path: ${{ steps.node_path.outputs.NODE_PATH }}
     steps:
       - uses: actions/checkout@v3
 
@@ -34,7 +31,6 @@ jobs:
           node-version: 19.x
 
       - name: Install fr-config-promote
-        id: node_path
         run: |
           git clone https://github.com/ForgeRock/fr-config-manager.git
           cd fr-config-manager
@@ -43,55 +39,26 @@ jobs:
           sudo apt-get update && sudo apt-get install -y jq
           cd packages/fr-config-promote
           npm link
-          echo "NODE_PATH=$(npm root -g)" >> $GITHUB_OUTPUT
 
-  check_status:
-    name: Check Lock Status
-    runs-on: ubuntu-latest
-    environment: pspromodev
-    needs: setup
-    outputs:
-      global_lock: ${{ steps.check.outputs.GLOBAL_LOCK }}
-      promotion_id: ${{ steps.check.outputs.promotion_id }}
-    steps:
-      - name: Use Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 19.x
-
-      - name: Check lock status
-        id: check
+      - name: Check Promotion Status
+        id: check_status
         run: |
-          cd packages/fr-config-promote
           OUTPUT=$(fr-config-promote check-promotion-status)
           echo "$OUTPUT"
 
           GLOBAL_LOCK=$(echo "$OUTPUT" | jq -r '.globalLock == "LOCKED"')
           PROMOTION_ID=$(echo "$OUTPUT" | jq -r '.promotionId')
 
-          echo "GLOBAL_LOCK=$GLOBAL_LOCK" >> $GITHUB_OUTPUT
-          echo "promotion_id=$PROMOTION_ID" >> $GITHUB_OUTPUT
+          echo "GLOBAL_LOCK=$GLOBAL_LOCK" >> $GITHUB_ENV
+          echo "PROMOTION_ID=$PROMOTION_ID" >> $GITHUB_ENV
 
-  lock:
-    name: Lock Tenants (if not already locked)
-    runs-on: ubuntu-latest
-    environment: pspromodev
-    needs: check_status
-    if: needs.check_status.outputs.global_lock == 'false'
-    steps:
-      - name: Lock tenant
+      - name: Lock tenant if not locked
+        if: env.GLOBAL_LOCK == 'false'
         run: |
-          echo "Tenants are not locked. Locking now..."
+          echo "Tenant is not locked. Locking now..."
           fr-config-promote lock-tenants
 
-  dryrun:
-    name: Run Dry Run Promotion
-    runs-on: ubuntu-latest
-    environment: pspromodev
-    needs: [check_status, lock]
-    if: needs.check_status.outputs.global_lock == 'true' || needs.lock.result == 'success'
-    steps:
-      - name: Run dry run promotion
+      - name: Run dry-run promotion
         run: |
           echo "Running dry-run promotion..."
           fr-config-promote run-dryrun-promotion
@@ -117,13 +84,7 @@ jobs:
 
           echo "✅ Promotion is READY."
 
-  unlock:
-    name: Unlock Tenant
-    runs-on: ubuntu-latest
-    environment: pspromodev
-    needs: [check_status, dryrun]
-    steps:
       - name: Unlock tenant
         run: |
           echo "Unlocking tenant..."
-          fr-config-promote unlock-tenants -i ${{ needs.check_status.outputs.promotion_id }}
+          fr-config-promote unlock-tenants -i $PROMOTION_ID
