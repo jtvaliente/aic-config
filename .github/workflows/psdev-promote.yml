@@ -88,6 +88,11 @@ jobs:
             fi
           done
 
+          echo "Dry-run Promotions is READY. Cycling lock..."
+          fr-config-promote unlock-tenants -i $PROMOTION_ID
+          sleep 5  # Optional: small delay to ensure unlock propagates
+          fr-config-promote lock-tenants
+
           echo "Dry-run promotion completed successfully: $MESSAGE"
 
       - name: Run promotion
