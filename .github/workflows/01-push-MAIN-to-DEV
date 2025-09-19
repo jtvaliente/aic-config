@@ -1,0 +1,76 @@
+# This is a basic workflow to help you get started with Actions
+
+name: 01-push-MAIN-to-DEV
+
+env:
+  SERVICE_ACCOUNT_ID: ${{ vars.SERVICE_ACCOUNT_ID }}
+  SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+  TENANT_BASE_URL: ${{ vars.TENANT_BASE_URL }}
+  REALMS: ${{ vars.REALMS }}
+  SCRIPT_PREFIXES: ${{ vars.SCRIPT_PREFIXES }}
+  SERVICE_ACCOUNT_CLIENT_ID: ${{ vars.SERVICE_ACCOUNT_CLIENT_ID }}
+  SERVICE_ACCOUNT_SCOPE: ${{ vars.SERVICE_ACCOUNT_SCOPE }}
+  CONFIG_DIR: ${{ github.workspace }}
+  
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the "main" branch
+  # push:
+  #   branches: [ "SBX" ]
+  # pull_request:
+  #   branches: [ "SBX" ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+  
+permissions:
+  id-token: write
+  contents: read
+  
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  deploy:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [ 19.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+    - name: "Metadata Inject"
+      uses: lmigtech/internal-actions/actions/metadata-inject@v0
+    - name: "Inject Secrets"
+      uses: lmigtech/internal-actions/actions/manifest-processor@v0
+      with:
+        name: secrets
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+    - name: install external repo
+      run: git clone https://github.com/ForgeRock/fr-config-manager.git
+    - name: Install config push
+      run: |
+          cd fr-config-manager
+          npm install --ws
+          npm install axios
+          npm i -g @forgerock/fr-config-manager
+    - name: Update static config
+      run: fr-config-push all-static
+      env:
+        SERVICE_ACCOUNT_ID: ${{ env.SECRET__DEV_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_KEY: ${{ env.SECRET__DEV_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+    - name: Get current date
+      run: echo "DATE=$(date +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+    - name: Update version metadata
+      run: |
+          fr-config-push config-metadata --metadata.pushedAt ${{env.DATE}} --metadata.build.commitID ${{github.sha}} --metadata.build.branch ${{github.ref_name}} --metadata.deploy.workflow ${{github.workflow}} --metadata.deploy.runNumber ${{github.run_number}}
+          fr-config-pull config-metadata
+      env:
+        SERVICE_ACCOUNT_ID: ${{ env.SECRET__DEV_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_KEY: ${{ env.SECRET__DEV_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
