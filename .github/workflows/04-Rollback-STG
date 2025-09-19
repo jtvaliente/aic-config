@@ -1,0 +1,182 @@
+name: 04-Rollback-STG
+
+env:
+  SERVICE_ACCOUNT_ID: ${{ vars.SERVICE_ACCOUNT_ID }}
+  SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+  TENANT_BASE_URL: ${{ vars.TENANT_BASE_URL }}
+  REALMS: ${{ vars.REALMS }}
+  SCRIPT_PREFIXES: ${{ vars.SCRIPT_PREFIXES }}
+  SERVICE_ACCOUNT_CLIENT_ID: ${{ vars.SERVICE_ACCOUNT_CLIENT_ID }}
+  SERVICE_ACCOUNT_SCOPE: ${{ vars.SERVICE_ACCOUNT_SCOPE }}
+  CONFIG_DIR: ${{ github.workspace }}
+  TENANT_ENV_UPPER_FQDN: ${{ vars.TENANT_ENV_UPPER_FQDN }}
+  SERVICE_ACCOUNT_UPPER_CLIENT_ID: ${{ vars.SERVICE_ACCOUNT_UPPER_CLIENT_ID }}
+  SERVICE_ACCOUNT_UPPER_ID: ${{ vars.SERVICE_ACCOUNT_UPPER_ID }}
+  SERVICE_ACCOUNT_UPPER_KEY: ${{ secrets.SERVICE_ACCOUNT_UPPER_KEY }}
+  SERVICE_ACCOUNT_PROMOTION_SCOPE: ${{ vars.SERVICE_ACCOUNT_PROMOTION_SCOPE }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [ 19.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Metadata Inject"
+      uses: lmigtech/internal-actions/actions/metadata-inject@v0
+    - name: "Inject Secrets"
+      uses: lmigtech/internal-actions/actions/manifest-processor@v0
+      with:
+        name: secrets
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+    - name: install external repo
+      run: git clone https://github.com/ForgeRock/fr-config-manager.git
+    - name: Install config promote
+      run: |
+          cd fr-config-manager
+          npm install --ws
+          npm install axios          
+          npm i -g @forgerock/fr-config-manager
+    - name: Check locked status
+      id: check_status
+      run: |
+        OUTPUT=$(fr-config-promote check-locked-status)
+        echo "$OUTPUT"
+
+        GLOBAL_LOCK=$(echo "$OUTPUT" | jq -r '.globalLock == "LOCKED"')
+        PROMOTION_ID=$(echo "$OUTPUT" | jq -r '.promotionId')
+
+        echo "GLOBAL_LOCK=$GLOBAL_LOCK" >> $GITHUB_ENV
+        echo "PROMOTION_ID=$PROMOTION_ID" >> $GITHUB_ENV
+        
+      env:
+        SERVICE_ACCOUNT_ID: ${{ env.SECRET__STG_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_KEY: ${{ env.SECRET__STG_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+        SERVICE_ACCOUNT_UPPER_ID: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_UPPER_KEY: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+    - name: Lock tenants if not locked
+      if: env.GLOBAL_LOCK == 'false'
+      run: |
+        echo "Tenants are not locked. Locking now..."
+        fr-config-promote lock-tenants
+      env:
+        SERVICE_ACCOUNT_ID: ${{ env.SECRET__STG_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_KEY: ${{ env.SECRET__STG_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+        SERVICE_ACCOUNT_UPPER_ID: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_UPPER_KEY: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}    
+    - name: Get a provisional rollback report
+      id: provisional_report
+      run: |
+        echo "Generating provisional rollback report..."
+        fr-config-promote check-promotion-reports --provisional-rollback
+
+        echo "Provisional Rollback Report:"
+        OUTPUT=$(fr-config-promote check-promotion-reports --provisional-rollback)
+  
+      env:
+        SERVICE_ACCOUNT_ID: ${{ env.SECRET__STG_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_KEY: ${{ env.SECRET__STG_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+        SERVICE_ACCOUNT_UPPER_ID: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_UPPER_KEY: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+    - name: Run Rollback
+      run: |
+        echo "Running actual rollback..."
+        fr-config-promote rollback -D 
+
+        STATUS="RUNNING"
+        while [ "$STATUS" != "READY" ]; do
+          echo "Running rollback..."
+          OUTPUT=$(fr-config-promote check-promotion-status)
+          STATUS=$(echo "$OUTPUT" | jq -r '.status')
+          MESSAGE=$(echo "$OUTPUT" | jq -r '.message')
+          PROMOTION_ID=$(echo "$OUTPUT" | jq -r '.promotionId')
+
+          echo "Promotion status: $STATUS"
+
+          if [ "$STATUS" == "ERROR" ]; then
+            echo "Rollback failed: $MESSAGE"
+            echo "Unlocking before exiting..."
+            fr-config-promote unlock-tenants -i $PROMOTION_ID
+            exit 1
+          fi
+
+          if [ "$STATUS" != "COMPLETE" ]; then
+            echo "Still processing... waiting..."
+            echo "$MESSAGE"
+            sleep 30
+          fi
+        done
+
+        echo "Rollback complete."
+      env:
+        SERVICE_ACCOUNT_ID: ${{ env.SECRET__STG_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_KEY: ${{ env.SECRET__STG_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+        SERVICE_ACCOUNT_UPPER_ID: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_UPPER_KEY: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+
+  update:
+    needs: rollback
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [ 19.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+      with:
+        ref: PRD
+    - name: "Metadata Inject"
+      uses: lmigtech/internal-actions/actions/metadata-inject@v0
+    - name: "Inject Secrets"
+      uses: lmigtech/internal-actions/actions/manifest-processor@v0
+      with:
+        name: secrets
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+    - name: install external repo
+      run: git clone https://github.com/ForgeRock/fr-config-manager.git
+    - name: Install config pull
+      run: |
+          cd fr-config-manager
+          npm install --ws
+          npm install axios
+          npm i -g @forgerock/fr-config-manager
+    - name: Update all config
+      run: fr-config-pull all
+      env:
+        SERVICE_ACCOUNT_ID: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_KEY: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+        TENANT_BASE_URL: ${{ env.TENANT_ENV_UPPER_FQDN }}
+    - name: Commit to branch
+      run: |
+        echo "DATE=$(date +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --global user.name "github-actions[bot]"
+        git add .
+        git commit -m "updated on $DATE via ${{ github.workflow }}"
+        git push
+    - name: Pull config metadata
+      run: fr-config-pull config-metadata
+      env: 
+        SERVICE_ACCOUNT_ID: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_ID }}
+        SERVICE_ACCOUNT_KEY: ${{ env.SECRET__PROD_SERVICE_ACCOUNT__SERVICE_ACCOUNT_KEY }}
+        TENANT_BASE_URL: ${{ env.TENANT_ENV_UPPER_FQDN }}
